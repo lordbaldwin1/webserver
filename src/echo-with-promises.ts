@@ -5,10 +5,10 @@ import * as net from "net";
 
 // Sockets:
 //
-// 
+//
 // Server:
 // Create a server, setup it's behavior on events (resolve promises)
-// Then, wait for connections 
+// Then, wait for connections
 
 // promise-based API for TCP sockets
 type TCPConn = {
@@ -26,13 +26,50 @@ type TCPConn = {
 };
 
 type TCPListener = {
-    server: net.Server;
-    err: null | Error;
-    accepter: null | {
-        resolve: (value: TCPConn) => void;
-        reject: (reason: Error) => void;
-    };
+  server: net.Server;
+  err: null | Error;
+  accepter: null | {
+    resolve: (value: TCPConn) => void;
+    reject: (reason: Error) => void;
+  };
 };
+
+type DynBuf = {
+  data: Buffer; // data.length is capacity
+  length: number; // length is length of used buffer
+};
+
+function bufPush(buf: DynBuf, data: Buffer): void {
+  const reqLen = buf.length + data.length;
+  if (reqLen > buf.data.length) {
+    let cap = Math.max(buf.data.length, 32);
+    while (reqLen > cap) {
+      cap *= 2;
+    }
+    const newBuf = Buffer.alloc(cap);
+    buf.data.copy(newBuf, 0, 0, buf.length);
+    buf.data = newBuf;
+  }
+  data.copy(buf.data, buf.length, 0);
+  buf.length = reqLen;
+}
+
+function cutMessage(buf: DynBuf): Buffer | null {
+  const endIdx = buf.data.subarray(0, buf.length).indexOf("\n");
+  if (endIdx < 0) {
+    return null;
+  }
+
+  const msg = Buffer.from(buf.data.subarray(0, endIdx + 1));
+  bufPop(buf, endIdx + 1);
+  return msg;
+}
+
+function bufPop(buf: DynBuf, lenToPop: number): void {
+  // basically take the buffer after the message, and copy it into the beginning
+  buf.data.copyWithin(0, lenToPop, buf.length);
+  buf.length -= lenToPop;
+}
 
 function socketInit(socket: net.Socket): TCPConn {
   const conn: TCPConn = {
@@ -42,22 +79,22 @@ function socketInit(socket: net.Socket): TCPConn {
     reader: null,
   };
 
-  socket.on('data', (data: Buffer) => {
+  socket.on("data", (data: Buffer) => {
     console.assert(conn.reader);
     conn.socket.pause();
     conn.reader!.resolve(data);
     conn.reader = null;
   });
 
-  socket.on('end', () => {
+  socket.on("end", () => {
     conn.ended = true;
     if (conn.reader) {
-      conn.reader.resolve(Buffer.from('')); // EOF
+      conn.reader.resolve(Buffer.from("")); // EOF
       conn.reader = null;
     }
   });
 
-  socket.on('error', (err: Error) => {
+  socket.on("error", (err: Error) => {
     conn.err = err;
     if (conn.reader) {
       conn.reader.reject(err);
@@ -80,9 +117,8 @@ function socketRead(conn: TCPConn): Promise<Buffer> {
       resolve(Buffer.from("")); // EOF
       return;
     }
-    // save promise callbacks
+
     conn.reader = { resolve: resolve, reject: reject };
-    // resume 'data' event to fullfill the promise later
     conn.socket.resume();
   });
 }
@@ -104,109 +140,120 @@ function socketWrite(conn: TCPConn, data: Buffer): Promise<void> {
       }
     });
   });
-};
+}
 
 // initializes a socket
 // and waits to read data and immediately
 // writes the data back
 async function serveClient(conn: TCPConn): Promise<void> {
-    while (true) {
-        const data = await socketRead(conn);
-        if (data.length === 0) {
-            console.log('ended connection');
-            break;
-        }
+  const buf: DynBuf = { data: Buffer.alloc(0), length: 0 };
+  while (true) {
+    const msg: null | Buffer = cutMessage(buf);
 
-        console.log('data:', data);
-        socketWrite(conn, data);
-        if (data.includes('q')) {
-            console.log('ending connection');
-            conn.socket.end();
-            break;
-        }
+    if (!msg) {
+      const data: Buffer = await socketRead(conn);
+      bufPush(buf, data);
+      if (data.length === 0) {
+        console.log("ended connection");
+        break;
+      }
+      continue;
     }
+
+    if (msg.equals(Buffer.from('quit\n'))) {
+      await socketWrite(conn, Buffer.from('Bye.\n'));
+      conn.socket.destroy();
+      conn.ended = true;
+      return;
+    } else {
+      const reply = Buffer.concat([Buffer.from('Echo: '), msg]);
+      await socketWrite(conn, reply);
+    }
+  }
 };
 
 // takes a socket and serves it
 // so that it can start reading data
 async function newConn(conn: TCPConn): Promise<void> {
-    console.log('new connection', conn.socket.remoteAddress, conn.socket.remotePort);
-    try {
-        await serveClient(conn);
-    } catch (exc) { // may want to actually handle errors
-        console.error('exception', exc);
-    } finally {
-        conn.socket.destroy();
-    }
-};
+  console.log(
+    "new connection",
+    conn.socket.remoteAddress,
+    conn.socket.remotePort
+  );
+  try {
+    await serveClient(conn);
+  } catch (exc) {
+    // may want to actually handle errors
+    console.error("exception", exc);
+  } finally {
+    conn.socket.destroy();
+  }
+}
 
 // this function is just creating and returning a promise.
 // it needs to be a promise so that it is only resolved
-// or rejected in the listener event handlers (aka when a 
+// or rejected in the listener event handlers (aka when a
 // connection/error happens)
 function serverAccept(listener: TCPListener): Promise<TCPConn> {
-    console.assert(listener);
-    return new Promise<TCPConn>((resolve, reject) => {
-        if (listener.err) {
-            reject(listener.err);
-            return;
-        };
-        listener.accepter = { resolve: resolve, reject: reject };
-    });
-};
+  console.assert(listener);
+  return new Promise<TCPConn>((resolve, reject) => {
+    if (listener.err) {
+      reject(listener.err);
+      return;
+    }
+    listener.accepter = { resolve: resolve, reject: reject };
+  });
+}
 
 // creates a server and starts listening
 // fulfills the promise
 function serverListen(port: number, host?: string): TCPListener {
-    const server = net.createServer({
-        pauseOnConnect: true,
-    });
-    const listener: TCPListener = {
-        server: server,
-        err: null,
-        accepter: null,
-    };
-    server.on('connection', (socket: net.Socket) => {
-        console.assert(listener.accepter);
-        const conn = socketInit(socket);
-        listener.accepter!.resolve(conn);
-        listener.accepter = null;
-    });
-    server.on('error', (err: Error) => {
-        listener.err = err;
-        if (listener.accepter) {
-            listener.accepter.reject(err);
-            listener.accepter = null;
-        }
-    });
-    server.listen(port, host);
-    return listener;
-};
+  const server = net.createServer({
+    pauseOnConnect: true,
+  });
+  const listener: TCPListener = {
+    server: server,
+    err: null,
+    accepter: null,
+  };
+  server.on("connection", (socket: net.Socket) => {
+    console.assert(listener.accepter);
+    const conn = socketInit(socket);
+    listener.accepter!.resolve(conn);
+    listener.accepter = null;
+  });
+  server.on("error", (err: Error) => {
+    listener.err = err;
+    if (listener.accepter) {
+      listener.accepter.reject(err);
+      listener.accepter = null;
+    }
+  });
+  server.listen(port, host);
+  return listener;
+}
 
 async function main() {
-    // server is now listening, event handlers are setup, but no promises creates
-    const listener = serverListen(8080, 'localhost');
-    console.log('Server listenin on localhost:8080');
-    while (true) {
-        try {
-            // when connection, we init a socket and resolve
-            // the promise, returning the TCPConn
-            // THIS IS SERVER
-            const conn = await serverAccept(listener); // blocks here
+  // server is now listening, event handlers are setup, but no promises creates
+  const listener = serverListen(8080, "localhost");
+  console.log("Server listenin on localhost:8080");
+  while (true) {
+    try {
+      // when connection, we init a socket and resolve
+      // the promise, returning the TCPConn
+      // THIS IS SERVER
+      const conn = await serverAccept(listener); // blocks here
 
-            // THIS IS HANDLING READING FROM CLIENT - per client
-            // Called without await, so it runs in the background
-            // takes the returned conn and serves it
-            // (loops and reads data from socket)
-            newConn(conn).catch(console.error);
-        } catch (err) {
-            console.error('Accept error:', err);
-            break;
-        }
+      // THIS IS HANDLING READING FROM CLIENT - per client
+      // Called without await, so it runs in the background
+      // takes the returned conn and serves it
+      // (loops and reads data from socket)
+      newConn(conn).catch(console.error);
+    } catch (err) {
+      console.error("Accept error:", err);
+      break;
     }
-};
+  }
+}
 
 main().catch(console.error);
-
-
-

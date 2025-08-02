@@ -174,6 +174,12 @@ this is NOT TCP congestion control, which also controls the window
 
 - the window tells how much data can be read into the buffer
 
+- on the application side, if writing is blocked, the app will stop producing when the send buf is full
+- this isn't the case when coding in JS with an event loop hehe, so we need to await writes
+           write()    unbounded!    event loop
+|producer| ======> |internal queue| =========> |send buf| =====> ...
+    app                Node.js                     OS      TCP
+
 
 
 
