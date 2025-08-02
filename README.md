@@ -158,6 +158,25 @@ Pending: Not settled.
 
 - In JS, you start background tasks by not awaiting an async function (not waiting for promises)
 
+## Backpressure
+- used to stop producer from producing faster than the consumer is consuming
+- In TCP, this is called flow control
+- the receiver has a receive buffer where an application reads from
+- the producer has a window (measurement) that it knows of, when that says buffer is full, it will pause sending data
+- consumer manages window, when it drains the receive buffer, it moves window (?) and alerts producer that it can start sending again
+
+IMPORTANT: TCP can pause and resume transmission so it doesn't overflow consumer's buffer
+                           flow ctrl    bounded!
+|producer| ==> |send buf| ===========> |recv buf| ==> |consumer|
+    app            OS         TCP          OS            app
+
+this is NOT TCP congestion control, which also controls the window
+
+- the window tells how much data can be read into the buffer
+
+
+
+
 
 
 
