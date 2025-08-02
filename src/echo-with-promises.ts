@@ -3,7 +3,6 @@ import * as net from "net";
 type TCPConn = {
   // the js socket object
   socket: net.Socket;
-
   // 'error' event
   err: null | Error;
   // EOF from 'end' event
@@ -61,7 +60,6 @@ function soRead(conn: TCPConn): Promise<Buffer> {
       reject(conn.err);
       return;
     }
-
     if (conn.ended) {
       resolve(Buffer.from("")); // EOF
       return;
@@ -90,12 +88,29 @@ function soWrite(conn: TCPConn, data: Buffer): Promise<void> {
       }
     });
   });
-}
+};
 
 async function serveClient(socket: net.Socket): Promise<void> {
     const conn: TCPConn = soInit(socket);
     while (true) {
         const data = await soRead(conn);
+        if (data.length === 0) {
+            console.log('ended connection');
+            break;
+        }
+        console.log('data:', data);
+        soWrite(conn, data);
+    }
+}
+
+async function newConn(socket: net.Socket): Promise<void> {
+    console.log('new connection', socket.remoteAddress, socket.remotePort);
+    try {
+        await serveClient(socket);
+    } catch (exc) { // may want to actually handle errors
+        console.error('exception', exc);
+    } finally {
+        socket.destroy();
     }
 }
 
