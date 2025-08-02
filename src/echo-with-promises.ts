@@ -36,40 +36,47 @@ type TCPListener = {
 
 type DynBuf = {
   data: Buffer; // data.length is capacity
-  length: number; // length is length of used buffer
+  start: number; // index where data starts
+  end: number; // index where data ends
 };
 
 function bufPush(buf: DynBuf, data: Buffer): void {
-  const reqLen = buf.length + data.length;
+  const reqLen = buf.end + data.length;
   if (reqLen > buf.data.length) {
     let cap = Math.max(buf.data.length, 32);
     while (reqLen > cap) {
       cap *= 2;
     }
     const newBuf = Buffer.alloc(cap);
-    buf.data.copy(newBuf, 0, 0, buf.length);
+    buf.data.copy(newBuf, 0, buf.start, buf.end);
+    buf.end -= buf.start;
+    buf.start = 0;
     buf.data = newBuf;
   }
-  data.copy(buf.data, buf.length, 0);
-  buf.length = reqLen;
-}
+  data.copy(buf.data, buf.end, 0);
+  buf.end += data.length;
+};
 
 function cutMessage(buf: DynBuf): Buffer | null {
-  const endIdx = buf.data.subarray(0, buf.length).indexOf("\n");
+  const endIdx = buf.data.subarray(buf.start, buf.end).indexOf("\n");
   if (endIdx < 0) {
     return null;
   }
 
-  const msg = Buffer.from(buf.data.subarray(0, endIdx + 1));
-  bufPop(buf, endIdx + 1);
+  const msg = Buffer.from(buf.data.subarray(buf.start, endIdx + 1));
+  bufPop(buf, buf.start + endIdx + 1);
   return msg;
-}
+};
 
-function bufPop(buf: DynBuf, lenToPop: number): void {
-  // basically take the buffer after the message, and copy it into the beginning
-  buf.data.copyWithin(0, lenToPop, buf.length);
-  buf.length -= lenToPop;
-}
+function bufPop(buf: DynBuf, newStart: number): void {
+  if (buf.start >= buf.data.length / 2) {
+    buf.data.copyWithin(0, newStart, buf.end);
+    buf.end -= newStart - buf.start;
+    buf.start = 0;
+  } else {
+    buf.start = newStart;
+  }
+};
 
 function socketInit(socket: net.Socket): TCPConn {
   const conn: TCPConn = {
@@ -146,7 +153,7 @@ function socketWrite(conn: TCPConn, data: Buffer): Promise<void> {
 // and waits to read data and immediately
 // writes the data back
 async function serveClient(conn: TCPConn): Promise<void> {
-  const buf: DynBuf = { data: Buffer.alloc(0), length: 0 };
+  const buf: DynBuf = { data: Buffer.alloc(0), start: 0, end: 0 };
   while (true) {
     const msg: null | Buffer = cutMessage(buf);
 
@@ -160,17 +167,17 @@ async function serveClient(conn: TCPConn): Promise<void> {
       continue;
     }
 
-    if (msg.equals(Buffer.from('quit\n'))) {
-      await socketWrite(conn, Buffer.from('Bye.\n'));
+    if (msg.equals(Buffer.from("quit\n"))) {
+      await socketWrite(conn, Buffer.from("Bye.\n"));
       conn.socket.destroy();
       conn.ended = true;
       return;
     } else {
-      const reply = Buffer.concat([Buffer.from('Echo: '), msg]);
+      const reply = Buffer.concat([Buffer.from("Echo: "), msg]);
       await socketWrite(conn, reply);
     }
   }
-};
+}
 
 // takes a socket and serves it
 // so that it can start reading data
@@ -236,7 +243,7 @@ function serverListen(port: number, host?: string): TCPListener {
 async function main() {
   // server is now listening, event handlers are setup, but no promises creates
   const listener = serverListen(8080, "localhost");
-  console.log("Server listenin on localhost:8080");
+  console.log("Server listening on localhost:8080");
   while (true) {
     try {
       // when connection, we init a socket and resolve

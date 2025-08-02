@@ -180,6 +180,21 @@ this is NOT TCP congestion control, which also controls the window
 |producer| ======> |internal queue| =========> |send buf| =====> ...
     app                Node.js                     OS      TCP
 
+## Pipelined Requests
+- although http is request-response, we can optimize by having a buffer allow for multiple requests to be sent at once
+- this greatly reduces load times because otherwise, a page that needs to make multiple requests, would need to make a roundtrip for each
+
+ client            server
+ ------            ------
+
+ |req1|  ==>
+ |req2|  ==>
+ |req3|  ==>  <==  |res1|
+  ...         <==  |res2|
+                    ...
+
+- web browsers do not use pipelined requests due to buggy servers, they use multiple concurrent connections instead
+- pipelining can cause a deadlock if both sender/receiver are sending and their send buffers are full
 
 
 
