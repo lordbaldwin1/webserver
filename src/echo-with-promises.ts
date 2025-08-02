@@ -1,4 +1,15 @@
 import * as net from "net";
+
+// How this fucking code works, because it took me
+// WAY too long to understand this...
+
+// Sockets:
+//
+// 
+// Server:
+// Create a server, setup it's behavior on events (resolve promises)
+// Then, wait for connections 
+
 // promise-based API for TCP sockets
 type TCPConn = {
   // the js socket object
@@ -14,7 +25,16 @@ type TCPConn = {
   };
 };
 
-function soInit(socket: net.Socket): TCPConn {
+type TCPListener = {
+    server: net.Server;
+    err: null | Error;
+    accepter: null | {
+        resolve: (value: TCPConn) => void;
+        reject: (reason: Error) => void;
+    };
+};
+
+function socketInit(socket: net.Socket): TCPConn {
   const conn: TCPConn = {
     socket: socket,
     err: null,
@@ -22,26 +42,22 @@ function soInit(socket: net.Socket): TCPConn {
     reader: null,
   };
 
-  socket.on("data", (data: Buffer) => {
+  socket.on('data', (data: Buffer) => {
     console.assert(conn.reader);
-
-    // pause the 'data' event until next read
     conn.socket.pause();
-    // fullfill the promise of the current read
     conn.reader!.resolve(data);
     conn.reader = null;
   });
 
-  socket.on("end", () => {
-    // also fulfills current read
+  socket.on('end', () => {
     conn.ended = true;
     if (conn.reader) {
-      conn.reader.resolve(Buffer.from("")); // EOF
+      conn.reader.resolve(Buffer.from('')); // EOF
       conn.reader = null;
     }
   });
 
-  socket.on("error", (err: Error) => {
+  socket.on('error', (err: Error) => {
     conn.err = err;
     if (conn.reader) {
       conn.reader.reject(err);
@@ -52,7 +68,7 @@ function soInit(socket: net.Socket): TCPConn {
   return conn;
 }
 
-function soRead(conn: TCPConn): Promise<Buffer> {
+function socketRead(conn: TCPConn): Promise<Buffer> {
   console.assert(!conn.reader); // no concurrent calls
   return new Promise<Buffer>((resolve, reject) => {
     // if connection is not readable, complete the promise now
@@ -71,7 +87,7 @@ function soRead(conn: TCPConn): Promise<Buffer> {
   });
 }
 
-function soWrite(conn: TCPConn, data: Buffer): Promise<void> {
+function socketWrite(conn: TCPConn, data: Buffer): Promise<void> {
   console.assert(data.length > 0);
 
   return new Promise<void>((resolve, reject) => {
@@ -90,31 +106,107 @@ function soWrite(conn: TCPConn, data: Buffer): Promise<void> {
   });
 };
 
-async function serveClient(socket: net.Socket): Promise<void> {
-    const conn: TCPConn = soInit(socket);
+// initializes a socket
+// and waits to read data and immediately
+// writes the data back
+async function serveClient(conn: TCPConn): Promise<void> {
     while (true) {
-        const data = await soRead(conn);
+        const data = await socketRead(conn);
         if (data.length === 0) {
             console.log('ended connection');
             break;
         }
-        console.log('data:', data);
-        soWrite(conn, data);
-    }
-}
 
-async function newConn(socket: net.Socket): Promise<void> {
-    console.log('new connection', socket.remoteAddress, socket.remotePort);
+        console.log('data:', data);
+        socketWrite(conn, data);
+        if (data.includes('q')) {
+            console.log('ending connection');
+            conn.socket.end();
+            break;
+        }
+    }
+};
+
+// takes a socket and serves it
+// so that it can start reading data
+async function newConn(conn: TCPConn): Promise<void> {
+    console.log('new connection', conn.socket.remoteAddress, conn.socket.remotePort);
     try {
-        await serveClient(socket);
+        await serveClient(conn);
     } catch (exc) { // may want to actually handle errors
         console.error('exception', exc);
     } finally {
-        socket.destroy();
+        conn.socket.destroy();
     }
-}
+};
 
-const server = net.createServer({
-  pauseOnConnect: true, // req by TCPConn
-});
+// this function is just creating and returning a promise.
+// it needs to be a promise so that it is only resolved
+// or rejected in the listener event handlers (aka when a 
+// connection/error happens)
+function serverAccept(listener: TCPListener): Promise<TCPConn> {
+    console.assert(listener);
+    return new Promise<TCPConn>((resolve, reject) => {
+        if (listener.err) {
+            reject(listener.err);
+            return;
+        };
+        listener.accepter = { resolve: resolve, reject: reject };
+    });
+};
+
+// creates a server and starts listening
+// fulfills the promise
+function serverListen(port: number, host?: string): TCPListener {
+    const server = net.createServer({
+        pauseOnConnect: true,
+    });
+    const listener: TCPListener = {
+        server: server,
+        err: null,
+        accepter: null,
+    };
+    server.on('connection', (socket: net.Socket) => {
+        console.assert(listener.accepter);
+        const conn = socketInit(socket);
+        listener.accepter!.resolve(conn);
+        listener.accepter = null;
+    });
+    server.on('error', (err: Error) => {
+        listener.err = err;
+        if (listener.accepter) {
+            listener.accepter.reject(err);
+            listener.accepter = null;
+        }
+    });
+    server.listen(port, host);
+    return listener;
+};
+
+async function main() {
+    // server is now listening, event handlers are setup, but no promises creates
+    const listener = serverListen(8080, 'localhost');
+    console.log('Server listenin on localhost:8080');
+    while (true) {
+        try {
+            // when connection, we init a socket and resolve
+            // the promise, returning the TCPConn
+            // THIS IS SERVER
+            const conn = await serverAccept(listener); // blocks here
+
+            // THIS IS HANDLING READING FROM CLIENT - per client
+            // Called without await, so it runs in the background
+            // takes the returned conn and serves it
+            // (loops and reads data from socket)
+            newConn(conn).catch(console.error);
+        } catch (err) {
+            console.error('Accept error:', err);
+            break;
+        }
+    }
+};
+
+main().catch(console.error);
+
+
 
