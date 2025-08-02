@@ -37,46 +37,50 @@ type TCPListener = {
 type DynBuf = {
   data: Buffer; // data.length is capacity
   start: number; // index where data starts
-  end: number; // index where data ends
+  length: number; // length of current data in buffer
 };
 
 function bufPush(buf: DynBuf, data: Buffer): void {
-  const reqLen = buf.end + data.length;
+  const reqLen = buf.start + buf.length + data.length;
   if (reqLen > buf.data.length) {
     let cap = Math.max(buf.data.length, 32);
     while (reqLen > cap) {
       cap *= 2;
     }
     const newBuf = Buffer.alloc(cap);
-    buf.data.copy(newBuf, 0, buf.start, buf.end);
-    buf.end -= buf.start;
+    buf.data.copy(newBuf, 0, buf.start, buf.start + buf.length);
     buf.start = 0;
     buf.data = newBuf;
   }
-  data.copy(buf.data, buf.end, 0);
-  buf.end += data.length;
-};
+  data.copy(buf.data, buf.start + buf.length, 0);
+  buf.length += data.length;
+}
 
 function cutMessage(buf: DynBuf): Buffer | null {
-  const endIdx = buf.data.subarray(buf.start, buf.end).indexOf("\n");
+  const endIdx = buf.data
+    .subarray(buf.start, buf.start + buf.length)
+    .indexOf("\n");
   if (endIdx < 0) {
     return null;
   }
 
-  const msg = Buffer.from(buf.data.subarray(buf.start, endIdx + 1));
-  bufPop(buf, buf.start + endIdx + 1);
+  const endOffset = buf.start + endIdx + 1;
+  const msg = Buffer.from(buf.data.subarray(buf.start, endOffset));
+  bufPop(buf, endIdx + 1);
   return msg;
-};
+}
 
-function bufPop(buf: DynBuf, newStart: number): void {
+function bufPop(buf: DynBuf, popLen: number): void {
+  const msgsStart = buf.start + popLen;
+  const msgsEnd = buf.start + buf.length;
   if (buf.start >= buf.data.length / 2) {
-    buf.data.copyWithin(0, newStart, buf.end);
-    buf.end -= newStart - buf.start;
+    buf.data.copyWithin(0, msgsStart, msgsEnd);
     buf.start = 0;
   } else {
-    buf.start = newStart;
+    buf.start = msgsStart;
   }
-};
+  buf.length -= popLen;
+}
 
 function socketInit(socket: net.Socket): TCPConn {
   const conn: TCPConn = {
@@ -153,7 +157,7 @@ function socketWrite(conn: TCPConn, data: Buffer): Promise<void> {
 // and waits to read data and immediately
 // writes the data back
 async function serveClient(conn: TCPConn): Promise<void> {
-  const buf: DynBuf = { data: Buffer.alloc(0), start: 0, end: 0 };
+  const buf: DynBuf = { data: Buffer.alloc(0), start: 0, length: 0 };
   while (true) {
     const msg: null | Buffer = cutMessage(buf);
 
