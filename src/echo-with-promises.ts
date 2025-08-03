@@ -1,24 +1,9 @@
 import * as net from "net";
 
-// How this fucking code works, because it took me
-// WAY too long to understand this...
-
-// Sockets:
-//
-//
-// Server:
-// Create a server, setup it's behavior on events (resolve promises)
-// Then, wait for connections
-
-// promise-based API for TCP sockets
 type TCPConn = {
-  // the js socket object
   socket: net.Socket;
-  // 'error' event
   err: null | Error;
-  // EOF from 'end' event
   ended: boolean;
-  // the callbacks of the promise of the current read
   reader: null | {
     resolve: (value: Buffer) => void;
     reject: (reason: Error) => void;
@@ -119,7 +104,6 @@ function socketInit(socket: net.Socket): TCPConn {
 function socketRead(conn: TCPConn): Promise<Buffer> {
   console.assert(!conn.reader); // no concurrent calls
   return new Promise<Buffer>((resolve, reject) => {
-    // if connection is not readable, complete the promise now
     if (conn.err) {
       reject(conn.err);
       return;

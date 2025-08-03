@@ -196,6 +196,14 @@ this is NOT TCP congestion control, which also controls the window
 - web browsers do not use pipelined requests due to buggy servers, they use multiple concurrent connections instead
 - pipelining can cause a deadlock if both sender/receiver are sending and their send buffers are full
 
+## Smarter Buffers
+- many HTTP implementations can use a fixed size buffer for headers since they don't allow a lot of data in the header
+- the buffer may also be sufficient for reading the payload if it doesn't need to store it in memory
+- not very relevant to node.js but it's important in environments with manual memory management
+
+## HTTP Semantics
+- stateless application-level protocol
+
 
 
 
