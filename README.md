@@ -203,6 +203,97 @@ this is NOT TCP congestion control, which also controls the window
 
 ## HTTP Semantics
 - stateless application-level protocol
+- Content-Length & Transfer-Encoding are most important because they determine the length of msg
+- header + body separated by empty line
+- line ends with '\r\n'. header ends with '\r\n\r\n' <- how we determine length of header
+
+- Length of the HTTP Body
+- 3 ways to determine:
+- Content-Length
+- parser reads socket to EOF after header and that's the body (can't tell if connection is ended early)
+
+## Chunked Transfer Encoding
+- THIRD way: use Transfer-Encoding: chunked instead of Content-Length
+- mark end of payload without knowing its size in advance
+- allows server to send response while generating it on the fly (streaming)
+    - i.e., displaying real-time logs to the client
+
+Another layer of protocol
+- get portion of payload, send it as a chunk
+- special chunk marks end of stream
+- receiver parses chunks until special chunk
+
+4\r\nHTTP\r\n5\r\nserver\r\n0\r\n\r\n
+It is parsed into 3 chunks:
+
+4\r\nHTTP\r\n
+6\r\nserver\r\n
+0\r\n\r\n
+
+^ chunks start with chunk length, 0 sized chunk is special (EOF)
+
+- chunks are not individual messages, application sees byte stream payload
+
+## Ambiguities in HTTP
+- If Transfer-Encoding: chunked, parse chunks
+- If Content-Length: number is valid, length is known
+- If neither is present, use the rest of connection data as payload
+
+- There are also special cases, such as GET & HEAD & 304 (Not Modified) status code
+
+- GET request no payload body, what if there is a Content-Length or Content-Length: 0?
+
+## HTTP Message Format
+HTTP-message   = start-line CRLF
+                 *( field-line CRLF )
+                 CRLF
+                 [ message-body ]
+start-line     = request-line / status-line
+
+- message is either request or response based on start line
+- followed by multiple header fields, then an empty line, then optional payload
+- '\r\n' ends lines and is called CLRF
+
+HTTP Header Fields
+
+field-line   = field-name ":" OWS field-value OWS
+The header field name and value are separated by a colon, but the rules for field name and value are defined in RFC 9110 instead.
+
+field-name     = token
+token          = 1*tchar
+tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*"
+               / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+               / DIGIT / ALPHA
+               ; any VCHAR, except delimiters
+
+OWS            = *( SP / HTAB )
+               ; optional whitespace
+
+field-value    = *field-content
+field-content  = field-vchar
+                 [ 1*( SP / HTAB / field-vchar ) field-vchar ]
+field-vchar    = VCHAR / obs-text
+obs-text       = %x80-FF
+
+- SP, HTAB, CHAR: space, tab, and printable ASCII character
+- some characters are forbidden in header like CR and LF
+- some fields have additional rules like comma-separated values or quoted strings
+
+- idempotent operation is one that can be repeated with the same effect
+    - retry safely until success
+
+A summary of general-purpose HTTP methods.
+
+Verb	Safe	Idempotent	Cacheable	<form>	CRUD	Req body	Res body
+GET	    Yes	    Yes	        Yes	        Yes	    read	No	        Yes
+HEAD	Yes	    Yes	        Yes	        No	    read	No	        No
+POST	No	    No	        No*	        Yes	    -	    Yes	        Yes
+PATCH	No	    No	        No*	        No	    update	Yes	        May
+PUT	    No	    Yes	        No	        No	    create	Yes	        May
+DELETE	No	    Yes	        No	        No	    delete	May	        May
+
+Note: Cacheable POST or PATCH is possible, but rarely supported.
+
 
 
 
